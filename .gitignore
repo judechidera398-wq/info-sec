@@ -1,5 +1,6 @@
 node_modules/
 .tools/
+.vercel/
 node-v*-win-x64.zip
 .next/
 out/
@@ -8,6 +9,7 @@ coverage/
 *.tsbuildinfo
 next-env.d.ts
 data/
+prod-ca-2021.crt
 .env
 .env.*
 !.env.example

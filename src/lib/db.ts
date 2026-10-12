@@ -9,13 +9,17 @@ function pool(): Pool {
   const connectionString = process.env.DATABASE_URL?.trim();
   if (!connectionString) throw new Error('Set DATABASE_URL to your Supabase Postgres connection string. See README.md.');
   const caPath = process.env.DATABASE_CA_CERT_PATH?.trim();
+  const caValue = process.env.DATABASE_CA_CERT?.trim().replace(/\\n/g, '\n');
   const url = new URL(connectionString);
   for (const option of ['sslmode', 'sslrootcert', 'sslcert', 'sslkey', 'sslpassword']) url.searchParams.delete(option);
 
   const instance = new Pool({
     connectionString: url.toString(),
-    ssl: { rejectUnauthorized: true, ...(caPath ? { ca: readFileSync(caPath, 'utf8') } : {}) },
-    max: 8,
+    ssl: {
+      rejectUnauthorized: true,
+      ...(caValue ? { ca: caValue } : caPath ? { ca: readFileSync(caPath, 'utf8') } : {}),
+    },
+    max: process.env.VERCEL ? 1 : 8,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
   });

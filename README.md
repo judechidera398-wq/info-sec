@@ -58,6 +58,17 @@ The `.env.local` file is git-ignored. Store it and the Supabase database passwor
 
 Google accounts are keyed by Google's stable subject identifier. The app does not automatically link a Google identity to an existing password account by matching email. It requests only the `openid email` scopes and does not store Google access tokens.
 
+## Deploy to Vercel
+
+1. Import `judechidera398-wq/info-sec` as a Next.js project in Vercel. Add Production environment variables before deploying because the app validates its pepper and MFA encryption key at startup/build time.
+2. Set `DATABASE_URL` to the Supabase **Transaction pooler** URI from the project Connect panel; this is the pooler mode intended for serverless functions. Do not use the local Session pooler URL for the hosted deployment.
+3. Add `DATABASE_CA_CERT` with the PEM contents of the Supabase root certificate (`prod-ca-2021.crt`). The server still verifies the certificate. Keep `DATABASE_CA_CERT_PATH` for local use; do not depend on a certificate file being present in the deployment bundle.
+4. Set `AUTH_PEPPER` and `MFA_ENCRYPTION_KEY` to the same values as `.env.local`. Set `GOOGLE_CLIENT_ID`, a newly rotated `GOOGLE_CLIENT_SECRET`, and `APP_ORIGIN` to the final HTTPS Vercel production origin, for example `https://your-project.vercel.app`.
+5. In Google Cloud, add that origin under **Authorized JavaScript origins** and `https://your-project.vercel.app/api/auth/google/callback` under **Authorized redirect URIs**. The callback URI must exactly match `APP_ORIGIN` plus `/api/auth/google/callback`.
+6. Use Vercel's Node.js runtime. Deploy, then test a password sign-in, MFA, Google sign-in, and role-restricted pages.
+
+Keep production values in Vercel's environment variable settings as secrets. Never add `.env.local`, database connection URLs, peppers, encryption keys, or OAuth client secrets to Git. Only configure Preview variables if preview deployments should be allowed to access the production database and OAuth client.
+
 ## Roles and permissions
 
 - **Admin:** account list, create, disable, re-enable, role changes, permanent deletion, and security audit events. The last active admin cannot be demoted, disabled, or deleted. An admin cannot disable or delete their own signed-in account.
