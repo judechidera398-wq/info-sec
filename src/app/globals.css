@@ -1,14 +1,15 @@
 :root {
-  --ink: #172b36;
-  --muted: #71808a;
-  --line: #e5e9eb;
-  --paper: #fff;
-  --canvas: #f5f7f8;
-  --green: #176c58;
-  --green-dark: #10523f;
-  --mint: #eaf4ef;
-  --amber: #b57b2a;
-  --red: #a34444;
+  color-scheme: dark;
+  --ink: #ecf5ef;
+  --muted: #98a69d;
+  --line: #29362f;
+  --paper: #101512;
+  --canvas: #080b09;
+  --green: #25d17c;
+  --green-dark: #15965a;
+  --mint: #11271b;
+  --amber: #e1b64f;
+  --red: #fa8078;
   --font-ui: "Montserrat", "Avenir Next", "Segoe UI", sans-serif;
 }
 
@@ -17,7 +18,7 @@ body {
   min-height: 100vh;
   margin: 0;
   color: var(--ink);
-  background: #f5f7f8;
+  background: var(--canvas);
   font: 14px/1.6 var(--font-ui);
   -webkit-font-smoothing: antialiased;
 }
@@ -178,3 +179,52 @@ footer span:first-child { font-weight: 800; letter-spacing: .13em; }
   .small-tag, .count-tag { font-size: 9px; white-space: nowrap; }
   footer { font-size: 8px; }
 }
+
+/* Dark charcoal surfaces with bright green accents. */
+body { background: var(--canvas); }
+.brand-mark { border-color: #244232; color: var(--green); background: #101612; box-shadow: 0 4px 18px #0008; }
+.local-pill { border-color: var(--line); color: #a4b2aa; background: #101512; }
+.auth-layout { border-color: #202c25; background: var(--paper); box-shadow: 0 24px 70px #0008; }
+.auth-visual { background: radial-gradient(ellipse at 80% 14%, #177946 0, transparent 38%), linear-gradient(145deg, #092116 0%, #0a1710 58%, #080d0a 100%); }
+.auth-visual h2 span { color: #39e28c; }
+.visual-kicker, .visual-copy, .visual-foot, .visual-points small { color: #b1c8ba; }
+.visual-icon, .point-icon { border-color: #ffffff25; background: #ffffff09; }
+.auth-card, .welcome-card, .content-card { background: var(--paper); }
+.auth-card label, .content-card label { color: #d4dfd8; }
+.auth-card small, .content-card small { color: #87958c; }
+.auth-card input, .content-card input, .actions select {
+  border-color: #2c3a32; color: var(--ink); background: #0a0e0b;
+}
+.auth-card input::placeholder, .content-card input::placeholder { color: #69776e; }
+input:focus, select:focus { border-color: var(--green); box-shadow: 0 0 0 3px #25d17c25; }
+.primary { color: #06120a; background: var(--green); }
+.primary:hover { background: #41e592; }
+.link-button { color: #48df91; }
+.auth-divider { color: #89978e; }
+.auth-divider::before, .auth-divider::after { background: #29362f; }
+.google-button { border-color: #303c34; color: #e1eae4; background: #111713; }
+.google-button:hover { border-color: #4b6655; background: #151e18; box-shadow: 0 4px 16px #0005; }
+.notice { border-color: #28533a; color: #a5e2bc; background: #102219; }
+.notice-error { border-color: #673936; color: #ffaaa3; background: #271413; }
+.enroll-box { border-color: var(--line); background: #0b100d; }
+.secret-key { color: #45dc8d; }
+.recovery-codes { border-color: #2d4033; color: #b5ebc9; background: #0d1a12; }
+.welcome-card, .content-card { border-color: var(--line); box-shadow: 0 10px 30px #0005; }
+.quiet-button, .mini-button { border-color: #303b34; color: #c4d2c9; background: #151b17; }
+.quiet-button:hover, .mini-button:hover { background: #1a251e; }
+.small-tag, .count-tag { border-color: #303a34; color: #a8b4ac; background: #151a17; }
+.count-tag { border-color: #28583b; color: #55df95; background: #12251a; }
+th { border-color: var(--line); color: #87958b; }
+td { border-color: #202b24; color: #a4b0a7; }
+.username-cell { color: #e0eae3; }
+.role-chip { border-color: #303b34; color: #c0cec4; background: #1a211c; }
+.role-admin { border-color: #395b48; color: #9ee1b8; background: #17271d; }
+.role-computer_admin { border-color: #5b4c2e; color: #e2c477; background: #252014; }
+.role-manager { border-color: #354c43; color: #a0d1b6; background: #17221b; }
+.status { color: #71d79a; }
+.status i { background: #3bd67e; }
+.status-disabled { color: #f39b91; }
+.status-disabled i { background: #e6766d; }
+.actions select { color: #c2cec6; }
+.mini-button.danger { color: #ff9288; }
+footer { color: #76837a; }
