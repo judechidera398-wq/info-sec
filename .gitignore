@@ -1,0 +1,13 @@
+node_modules/
+.tools/
+node-v*-win-x64.zip
+.next/
+out/
+dist/
+coverage/
+*.tsbuildinfo
+next-env.d.ts
+data/
+.env
+.env.*
+!.env.example

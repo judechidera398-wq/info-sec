@@ -1,0 +1,39 @@
+import { assertRole, audit, fail, getSession, isSameOrigin, ok } from '@/lib/auth';
+import { all, one } from '@/lib/db';
+import { hashPassword } from '@/lib/security';
+
+export const runtime = 'nodejs';
+
+export async function GET() {
+  const session = await getSession();
+  if (!session) return fail('Sign in required', 401);
+  const denied = assertRole(session, 'admin', 'computer_admin', 'manager');
+  if (denied) return denied;
+  const rows = session.role === 'manager'
+    ? await all('SELECT id,username,role,active,created_at FROM users WHERE role=$1 ORDER BY id', ['user'])
+    : await all('SELECT id,username,role,active,created_at FROM users ORDER BY id');
+  return ok(rows);
+}
+
+export async function POST(request: Request) {
+  if (!isSameOrigin(request)) return fail('Origin not allowed', 403);
+  const session = await getSession();
+  if (!session) return fail('Sign in required', 401);
+  const denied = assertRole(session, 'admin', 'computer_admin');
+  if (denied) return denied;
+  const body = await request.json().catch(() => null) as {username?:unknown;password?:unknown}|null;
+  if (typeof body?.username !== 'string' || !/^[A-Za-z0-9_.-]{3,64}$/.test(body.username)
+      || typeof body.password !== 'string' || body.password.length < 12 || body.password.length > 256) {
+    return fail('Use a 3–64 character username and a password of at least 12 characters.');
+  }
+  try {
+    const encoded = await hashPassword(body.password);
+    const result = await one<{id:string}>('INSERT INTO users(username,password_hash,role) VALUES($1,$2,\'user\') RETURNING id',
+      [body.username, encoded]);
+    await audit(session.userId, 'user.create', body.username);
+    return ok({id:Number(result?.id),username:body.username,role:'user'}, 201);
+  } catch (error) {
+    if ((error as {code?:string})?.code === '23505') return fail('Username is unavailable', 409);
+    throw error;
+  }
+}
