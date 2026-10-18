@@ -54,6 +54,7 @@ export async function GET(request: Request) {
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   if (!clientId || !clientSecret) return failedRedirect();
 
+  let stage = 'google_token_exchange';
   try {
     const redirectUri = `${appOrigin}/api/auth/google/callback`;
     const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
@@ -70,10 +71,13 @@ export async function GET(request: Request) {
       cache: 'no-store',
       signal: AbortSignal.timeout(10_000),
     });
-    if (!tokenResponse.ok) throw new Error('Google token exchange failed');
+    if (!tokenResponse.ok) {
+      throw Object.assign(new Error('Google token exchange failed'), { code: `GOOGLE_TOKEN_HTTP_${tokenResponse.status}` });
+    }
     const tokenBody = await tokenResponse.json() as { id_token?: unknown };
     if (typeof tokenBody.id_token !== 'string' || tokenBody.id_token.length > 16_384) throw new Error('Missing Google identity token');
 
+    stage = 'identity_token_validation';
     const { payload } = await jwtVerify(tokenBody.id_token, googleKeys, {
       issuer,
       audience: clientId,
@@ -86,10 +90,12 @@ export async function GET(request: Request) {
       throw new Error('Google identity claims were not accepted');
     }
 
+    stage = 'account_lookup';
     let user = await one<{ id: number; username: string; active: number; session_version: number; totp_secret: string | null }>(
       'SELECT id,username,active,session_version,totp_secret FROM users WHERE google_sub=$1', [payload.sub]);
 
     if (!user) {
+      stage = 'account_creation';
       const emailName = payload.email.split('@')[0].replace(/[^A-Za-z0-9_.-]/g, '_').replace(/^[^A-Za-z0-9]+/, '').slice(0, 35) || 'user';
       const username = `g_${emailName}_${payload.sub.slice(-8)}`;
       const passwordPlaceholder = `google-oauth$${randomToken()}`;
@@ -107,12 +113,20 @@ export async function GET(request: Request) {
       return failedRedirect();
     }
 
+    stage = 'session_creation';
     const session = await createPendingSession(user.id, user.session_version);
     await putSessionCookie(session.token);
     await audit(user.id, 'auth.google', user.username);
     const step = user.totp_secret ? 'verify' : 'setup';
     return clearOauthCookies(NextResponse.redirect(new URL(`/?google=${step}`, appOrigin)));
-  } catch {
+  } catch (error) {
+    const code = typeof error === 'object' && error !== null && 'code' in error
+      && typeof error.code === 'string' ? error.code : undefined;
+    console.error('Google OAuth callback failed', {
+      stage,
+      errorName: error instanceof Error ? error.name : 'UnknownError',
+      ...(code ? { code } : {}),
+    });
     await audit(null, 'auth.google', null, 'failure');
     return failedRedirect();
   }
