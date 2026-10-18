@@ -7,7 +7,7 @@ import { decryptSecret, encryptSecret } from './security';
 export function newTotp(username: string) {
   const secret = new OTPAuth.Secret({ size: 20 });
   const totp = new OTPAuth.TOTP({
-    issuer: 'Local Access', label: username, algorithm: 'SHA1', digits: 6, period: 30, secret,
+    issuer: 'Library Management', label: username, algorithm: 'SHA1', digits: 6, period: 30, secret,
   });
   return { base32: secret.base32, uri: totp.toString() };
 }
@@ -16,7 +16,7 @@ export async function setupPayload(username: string, sessionId: number) {
   let prior = await one<{ seed_ciphertext: string }>('SELECT seed_ciphertext FROM pending_mfa WHERE session_id=$1', [sessionId]);
   if (prior) {
     const seed = decryptSecret(prior.seed_ciphertext);
-    const totp = new OTPAuth.TOTP({ issuer: 'Local Access', label: username, algorithm: 'SHA1', digits: 6, period: 30,
+    const totp = new OTPAuth.TOTP({ issuer: 'Library Management', label: username, algorithm: 'SHA1', digits: 6, period: 30,
       secret: OTPAuth.Secret.fromBase32(seed) });
     return { secret: seed, uri: totp.toString() };
   }
@@ -26,7 +26,7 @@ export async function setupPayload(username: string, sessionId: number) {
   prior = await one<{ seed_ciphertext: string }>('SELECT seed_ciphertext FROM pending_mfa WHERE session_id=$1', [sessionId]);
   if (!prior) throw new Error('Could not store pending MFA setup.');
   const seed = decryptSecret(prior.seed_ciphertext);
-  const totp = new OTPAuth.TOTP({ issuer: 'Local Access', label: username, algorithm: 'SHA1', digits: 6, period: 30,
+  const totp = new OTPAuth.TOTP({ issuer: 'Library Management', label: username, algorithm: 'SHA1', digits: 6, period: 30,
     secret: OTPAuth.Secret.fromBase32(seed) });
   return { secret: seed, uri: totp.toString() };
 }
@@ -38,7 +38,7 @@ export async function pendingSeed(sessionId: number): Promise<string | null> {
 
 export function validTotp(seed: string, code: string): boolean {
   if (!/^\d{6}$/.test(code)) return false;
-  const totp = new OTPAuth.TOTP({ issuer: 'Local Access', label: 'account', algorithm: 'SHA1', digits: 6, period: 30,
+  const totp = new OTPAuth.TOTP({ issuer: 'Library Management', label: 'account', algorithm: 'SHA1', digits: 6, period: 30,
     secret: OTPAuth.Secret.fromBase32(seed) });
   return totp.validate({ token: code, window: 1 }) !== null;
 }

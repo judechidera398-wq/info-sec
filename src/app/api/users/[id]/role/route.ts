@@ -11,8 +11,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   if (denied) return denied;
   const id = Number((await context.params).id);
   const body = await request.json().catch(() => null) as {role?:unknown}|null;
-  const validRoles: Role[] = ['admin','computer_admin','manager','user'];
+  const validRoles: Role[] = ['admin','manager','inputer','user'];
   if (!Number.isSafeInteger(id) || id < 1 || typeof body?.role !== 'string' || !validRoles.includes(body.role as Role)) return fail('Invalid request');
+  if (session.userId === id) return fail('You cannot change your own role.');
   const target = await one<{username:string;role:Role}>('SELECT username,role FROM users WHERE id=$1', [id]);
   if (!target) return fail('User not found', 404);
   if (target.role === 'admin' && body.role !== 'admin') {

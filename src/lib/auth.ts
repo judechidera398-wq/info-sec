@@ -7,7 +7,7 @@ import { keyedDigest, randomToken, tokenDigest } from './security';
 
 const COOKIE = 'local_access_session';
 const SESSION_SECONDS = 30 * 60;
-export type Role = 'admin' | 'computer_admin' | 'manager' | 'user';
+export type Role = 'admin' | 'manager' | 'inputer' | 'user';
 export type AuthSession = {
   sessionId: number; userId: number; username: string; role: Role;
   active: number; sessionVersion: number; stage: 'pending' | 'active';

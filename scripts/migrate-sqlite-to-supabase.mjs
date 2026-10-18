@@ -44,9 +44,10 @@ try {
   client = await pool.connect();
   await client.query('BEGIN');
   for (const user of users) {
+    const role = user.role === 'computer_admin' ? 'manager' : user.role;
     await client.query(`INSERT INTO users(id,username,password_hash,google_sub,totp_secret,role,active,session_version,created_at)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [user.id,user.username,user.password_hash,user.google_sub,user.totp_secret,
-      user.role,user.active,user.session_version,user.created_at]);
+      role,user.active,user.session_version,user.created_at]);
   }
   for (const session of sessions) {
     await client.query(`INSERT INTO sessions(id,token_hash,user_id,session_version,stage,expires_at,created_at)

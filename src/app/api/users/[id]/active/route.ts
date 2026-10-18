@@ -7,14 +7,13 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   if (!isSameOrigin(request)) return fail('Origin not allowed', 403);
   const session = await getSession();
   if (!session) return fail('Sign in required', 401);
-  const denied = assertRole(session, 'admin', 'computer_admin');
+  const denied = assertRole(session, 'admin');
   if (denied) return denied;
   const id = Number((await context.params).id);
   if (!Number.isSafeInteger(id) || id < 1) return fail('Invalid user id');
   if (session.userId === id) return fail('You cannot disable your own signed-in account');
   const target = await one<{username:string;role:string;active:number}>('SELECT username,role,active FROM users WHERE id=$1', [id]);
   if (!target) return fail('User not found', 404);
-  if (session.role === 'computer_admin' && ['admin','computer_admin'].includes(target.role)) return fail('Cannot change administrator accounts', 403);
   if (target.role === 'admin' && target.active) {
     const admins = await one<{n:number}>("SELECT COUNT(*)::int AS n FROM users WHERE role='admin' AND active=1");
     if ((admins?.n ?? 0) <= 1) return fail('Cannot disable the last active administrator', 409);

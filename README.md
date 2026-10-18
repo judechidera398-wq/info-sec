@@ -1,6 +1,8 @@
-# Local Access
+# Library Management System
 
-A Next.js sign-in and account administration app. The app server handles passwords, MFA, sessions, Google sign-in, and role checks. Supabase Postgres stores accounts and security events. The browser never connects to the database.
+A secure library operations app for book catalogue management, member records, circulation, and staff access. The Next.js server handles passwords, MFA, sessions, Google sign-in, and role checks. Supabase Postgres stores accounts, books, members, loans, and security events. The browser never connects directly to the database.
+
+See [the system security and CIA Triad documentation](docs/system-security-and-cia-triad.md) for the architecture, authentication and role flows, data handling, threats, information-security principles, operational guidance, and limitations.
 
 ## Requirements
 
@@ -18,6 +20,8 @@ A Next.js sign-in and account administration app. The app server handles passwor
 5. Stop the running Next.js server before importing, so no local sign-ins change while the data is copied.
 
 ## Initialize and import
+
+The schema includes an idempotent upgrade for existing installations: it adds library tables and maps the former computer administrator role to manager while preserving existing admin, manager, and reader accounts. Run `supabase/schema.sql` in the Supabase SQL Editor (or run `npm.cmd run db:init` locally) before using the library features. Existing records remain in place.
 
 If you installed Node.js system-wide, run these commands from the project folder after installing dependencies. On this computer Node.js is available in the project’s `.tools` folder, so in PowerShell you can use:
 
@@ -71,12 +75,25 @@ Keep production values in Vercel's environment variable settings as secrets. Nev
 
 ## Roles and permissions
 
-- **Admin:** account list, create, disable, re-enable, role changes, permanent deletion, and security audit events. The last active admin cannot be demoted, disabled, or deleted. An admin cannot disable or delete their own signed-in account.
-- **Computer administrator:** view accounts, create basic users, and enable or disable basic users and managers. Cannot alter administrator accounts or assign roles. This is an application role; it does not grant Windows or host operating-system privileges.
-- **Manager:** read-only view of the basic-user roster. Team-specific data scoping is not included because this starter has no business-record model.
-- **User:** sign in, use MFA, and change their own password after confirming the current password and MFA.
+- **Admin:** manage staff accounts and roles; add, edit, and delete books; manage members and loans; view recent audit events. The last active admin cannot be demoted, disabled, or deleted, and an admin cannot change or delete their own account.
+- **Manager:** add and edit books, manage member records, check books out and record returns, and view circulation status. Cannot manage staff roles or permanently delete books.
+- **Inputer:** routine catalogue, member, checkout, and return entry. Cannot manage staff accounts or delete books.
+- **Reader (`user`):** read-only access to search and view the catalogue. Public registration and new Google accounts receive only this role; only an admin can grant staff roles.
 
 All role permissions are checked in the backend for each API request. Interface controls are not treated as security boundaries.
+
+## Library features
+
+- Search the catalogue by title, author, ISBN, or category. Store publisher/year and track total versus available copies.
+- Register members with a unique member number and contact details. Members can be deactivated; active loans must be returned first.
+- Check out available copies to active members with a due date. Database transactions lock inventory rows so concurrent checkouts cannot overspend available copies.
+- Record returns once, update available inventory, and view active, overdue, and returned loans.
+- Books with loan history cannot be permanently deleted, preserving circulation records. Only admins can delete books without loan history.
+- Admins can create inputer accounts, assign staff roles, disable accounts, and review recent audit events.
+
+The current starter does not include reservations, fines/payments, barcode scanning, email reminders, member self-service accounts, or multi-branch inventory.
+
+For a demonstration database, first apply `supabase/schema.sql` in Supabase SQL Editor, then run `supabase/demo-seed.sql` against a **test/staging database**. The seed uses clearly marked fictional records, creates no login accounts, and is safe to rerun. Do not load sample circulation data into a live library database.
 
 ## Security design
 

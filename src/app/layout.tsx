@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Local Access',
-  description: 'Local sign-in and account administration',
+  title: 'Library Management',
+  description: 'Secure library catalogue, membership, and circulation management',
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
