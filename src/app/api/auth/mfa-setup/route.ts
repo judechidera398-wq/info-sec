@@ -1,4 +1,4 @@
-import { addAttempt, audit, fail, generateRecoveryCodes, getSession, isRateLimited, isSameOrigin, ok, putSessionCookie, rotateToActive } from '@/lib/auth';
+import { addAttempt, audit, fail, generateRecoveryCodes, getSession, isMobileRequest, isRateLimited, isSameOrigin, ok, putSessionCookie, rotateToActive } from '@/lib/auth';
 import { one, run } from '@/lib/db';
 import { pendingSeed, qrDataUrl, setupPayload, validTotp } from '@/lib/mfa';
 import { encryptSecret } from '@/lib/security';
@@ -33,7 +33,7 @@ export async function POST(request: Request) {
   await run('UPDATE users SET totp_secret=$1 WHERE id=$2', [encryptSecret(seed), session.userId]);
   await addAttempt(session.username, true);
   const token = await rotateToActive(session.sessionId, session.userId, session.sessionVersion);
-  await putSessionCookie(token);
+  if (!isMobileRequest(request)) await putSessionCookie(token);
   await audit(session.userId, 'auth.mfa_enroll', session.username);
-  return ok({ message: 'Two-factor authentication enabled', recoveryCodes });
+  return ok({ message: 'Two-factor authentication enabled', recoveryCodes, ...(isMobileRequest(request) ? { token } : {}) });
 }

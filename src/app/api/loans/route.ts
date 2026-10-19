@@ -38,6 +38,10 @@ export async function POST(request: Request) {
     const member = await client.query<{active:number}>('SELECT active FROM library_members WHERE id=$1 FOR UPDATE', [memberId]);
     if (!member.rows[0]) return {memberMissing:true as const};
     if (!member.rows[0].active) return {memberInactive:true as const};
+    const setting = await client.query<{limit:number}>("SELECT COALESCE((setting_value #>> '{}')::int,5) AS limit FROM system_settings WHERE setting_key='max_active_loans'");
+    const limit = setting.rows[0]?.limit ?? 5;
+    const current = await client.query<{count:number}>('SELECT COUNT(*)::int AS count FROM loans WHERE member_id=$1 AND returned_at IS NULL', [memberId]);
+    if (current.rows[0].count >= limit) return {memberLimitReached:true as const,limit};
     await client.query('UPDATE books SET copies_available=copies_available-1,updated_at=NOW() WHERE id=$1', [bookId]);
     const loan = await client.query<{id:number}>('INSERT INTO loans(book_id,member_id,checked_out_by,due_at) VALUES($1,$2,$3,$4) RETURNING id',
       [bookId,memberId,session.userId,dueAt]);
@@ -47,6 +51,7 @@ export async function POST(request: Request) {
   if ('unavailable' in result) return fail('No copies are currently available.', 409);
   if ('memberMissing' in result) return fail('Member not found', 404);
   if ('memberInactive' in result) return fail('This member is inactive.', 409);
+  if ('memberLimitReached' in result) return fail(`This member has reached the limit of ${result.limit} active loans.`, 409);
   await audit(session.userId, 'loan.checkout', String(result.loanId));
   return ok({id:result.loanId,message:'Book checked out'}, 201);
 }

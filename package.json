@@ -4,12 +4,14 @@
   "private": true,
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1",
+    "dev:lan": "next dev --hostname 0.0.0.0",
     "build": "next build",
     "start": "next start --hostname 127.0.0.1",
     "lint": "eslint .",
     "db:init": "node scripts/init-db.mjs",
     "db:import-sqlite": "node scripts/migrate-sqlite-to-supabase.mjs",
-    "admin:create": "node scripts/create-admin.mjs"
+    "admin:create": "node scripts/create-admin.mjs",
+    "demo:users": "node scripts/seed-demo-users.mjs"
   },
   "dependencies": {
     "argon2": "^0.44.0",

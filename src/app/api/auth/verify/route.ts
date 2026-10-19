@@ -1,4 +1,4 @@
-import { addAttempt, audit, consumeRecoveryCode, fail, getSession, isRateLimited, isSameOrigin, ok, putSessionCookie, rotateToActive } from '@/lib/auth';
+import { addAttempt, audit, consumeRecoveryCode, fail, getSession, isMobileRequest, isRateLimited, isSameOrigin, ok, putSessionCookie, rotateToActive } from '@/lib/auth';
 import { one } from '@/lib/db';
 import { getEncryptedTotp, validTotp } from '@/lib/mfa';
 
@@ -22,7 +22,7 @@ export async function POST(request: Request) {
     return fail('Invalid verification code', 401);
   }
   const token = await rotateToActive(session.sessionId, session.userId, session.sessionVersion);
-  await putSessionCookie(token);
+  if (!isMobileRequest(request)) await putSessionCookie(token);
   await audit(session.userId, 'auth.mfa', session.username);
-  return ok({ message: 'Signed in' });
+  return ok({ message: 'Signed in', ...(isMobileRequest(request) ? { token } : {}) });
 }

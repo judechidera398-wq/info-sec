@@ -1,5 +1,5 @@
 import 'server-only';
-import { cookies } from 'next/headers';
+import { cookies, headers } from 'next/headers';
 import { randomBytes } from 'node:crypto';
 import { one, run, transaction } from './db';
 import { appOrigin, cookieSecure } from './env';
@@ -22,7 +22,18 @@ export function ok(value: unknown, status = 200) {
 }
 
 export function isSameOrigin(request: Request): boolean {
-  return request.headers.get('origin')?.replace(/\/$/, '') === appOrigin;
+  if (request.headers.get('origin')?.replace(/\/$/, '') === appOrigin) return true;
+  if (request.headers.get('x-app-client') !== 'mobile') return false;
+  const bearer = request.headers.get('authorization') ?? '';
+  if (/^Bearer [A-Za-z0-9_-]{43}$/.test(bearer)) return true;
+  // The password login endpoint is public already; the marker lets the native
+  // client call it without opening the other mutating endpoints to unauthenticated requests.
+  const url = new URL(request.url);
+  return request.method === 'POST' && url.pathname === '/api/auth/login' && !bearer;
+}
+
+export function isMobileRequest(request: Request): boolean {
+  return request.headers.get('x-app-client') === 'mobile';
 }
 
 export async function putSessionCookie(token: string) {
@@ -48,7 +59,11 @@ export async function createPendingSession(userId: number, version: number): Pro
 }
 
 export async function getSession(): Promise<AuthSession | null> {
-  const token = (await cookies()).get(COOKIE)?.value;
+  const requestHeaders = await headers();
+  const authorization = requestHeaders.get('authorization') ?? '';
+  const bearer = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(authorization)?.[1];
+  const cookieToken = (await cookies()).get(COOKIE)?.value;
+  const token = requestHeaders.get('x-app-client') === 'mobile' ? bearer : cookieToken ?? bearer;
   if (!token) return null;
   const session = await one<AuthSession & { expiresAt: number; currentVersion: number }>(`SELECT s.id AS "sessionId",s.user_id AS "userId",s.session_version AS "sessionVersion",
       s.stage,s.expires_at AS "expiresAt",u.username,u.role,u.active,u.session_version AS "currentVersion"

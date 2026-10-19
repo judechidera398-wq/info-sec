@@ -1,13 +1,17 @@
 'use client';
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { ChangeEvent, FormEvent } from 'react';
 
 type Role = 'admin'|'manager'|'inputer'|'user';
 type Identity = {id:number;username:string;role:Role};
 type Book = {id:number;isbn:string|null;title:string;author:string;category:string;publisher:string;publication_year:number|null;copies_total:number;copies_available:number};
 type Member = {id:number;member_code:string;full_name:string;email:string;phone:string;active:number;active_loans:number};
 type Loan = {id:number;book_id:number;member_id:number;checked_out_at:string;due_at:string;returned_at:string|null;book_title:string;isbn:string|null;member_code:string;member_name:string;status:'returned'|'overdue'|'on_loan'};
-type Account = {id:number;username:string;role:Role;active:number;created_at:string};
+type Account = {id:number;username:string;role:Role;active:number;deleted_at:string|null;created_at:string};
+type Settings = {library_name:string;default_loan_days:number;max_active_loans:number};
+type ConfigSnapshot = {id:number;label:string;created_at:string;created_by:string|null};
+type RowCounts = {users:number;books:number;members:number;loans:number};
 type Tab = 'overview'|'catalog'|'members'|'loans'|'staff'|'security';
 
 async function api<T>(path:string, init:RequestInit = {}):Promise<T> {
@@ -36,6 +40,9 @@ export function LibraryConsole({identity,onSignOut}:{identity:Identity;onSignOut
   const [members,setMembers] = useState<Member[]>([]);
   const [loans,setLoans] = useState<Loan[]>([]);
   const [accounts,setAccounts] = useState<Account[]>([]);
+  const [settings,setSettings] = useState<Settings>({library_name:'Vault of Value Library',default_loan_days:14,max_active_loans:5});
+  const [snapshots,setSnapshots] = useState<ConfigSnapshot[]>([]);
+  const [rowCounts,setRowCounts] = useState<RowCounts>({users:0,books:0,members:0,loans:0});
   const [events,setEvents] = useState<Array<{actor_id:number|null;action:string;target:string|null;outcome:string;created_at:string}>>([]);
   const [search,setSearch] = useState('');
   const [editingBook,setEditingBook] = useState<Book|null>(null);
@@ -49,13 +56,14 @@ export function LibraryConsole({identity,onSignOut}:{identity:Identity;onSignOut
     try {
       const nextBooks=await api<Book[]>('/api/books');
       setBooks(nextBooks);
+      setSettings(await api<Settings>('/api/settings'));
       if (isStaff) {
         const [nextMembers,nextLoans]=await Promise.all([api<Member[]>('/api/members'),api<Loan[]>('/api/loans')]);
         setMembers(nextMembers);setLoans(nextLoans);
       }
       if (isAdmin) {
-        const [nextAccounts,nextEvents]=await Promise.all([api<Account[]>('/api/users'),api<typeof events>('/api/audit')]);
-        setAccounts(nextAccounts);setEvents(nextEvents);
+        const [nextAccounts,nextEvents,nextSnapshotInfo]=await Promise.all([api<Account[]>('/api/users'),api<typeof events>('/api/audit'),api<{snapshots:ConfigSnapshot[];counts:RowCounts}>('/api/settings/snapshots')]);
+        setAccounts(nextAccounts);setEvents(nextEvents);setSnapshots(nextSnapshotInfo.snapshots);setRowCounts(nextSnapshotInfo.counts);
       }
     } catch (cause) {
       flash(cause instanceof Error?cause.message:'Could not load library data.',true);
@@ -102,8 +110,46 @@ export function LibraryConsole({identity,onSignOut}:{identity:Identity;onSignOut
   }
 
   async function createStaff(form:FormData) {
-    await api('/api/users',{method:'POST',body:JSON.stringify({username:form.get('username'),password:form.get('password')})});
-    flash('Inputer account created.');await load();
+    await api('/api/users',{method:'POST',body:JSON.stringify({username:form.get('username'),password:form.get('password'),role:form.get('role')})});
+    flash('Account created. The user will set up MFA on first sign-in.');await load();
+  }
+
+  async function saveSettings(form:FormData) {
+    const next=await api<Settings>('/api/settings',{method:'PUT',body:JSON.stringify({library_name:form.get('library_name'),default_loan_days:Number(form.get('default_loan_days')),max_active_loans:Number(form.get('max_active_loans'))})});
+    setSettings(next);flash('Library settings saved.');await load();
+  }
+
+  async function createConfigSnapshot() {
+    try { await api('/api/settings/snapshots',{method:'POST',body:JSON.stringify({label:`Configuration ${new Date().toLocaleString()}`})});flash('Configuration restore point created.');await load(); }
+    catch(cause) { flash(cause instanceof Error?cause.message:'Could not create restore point.',true); }
+  }
+
+  async function restoreConfigSnapshot(snapshot:ConfigSnapshot) {
+    if(!window.confirm(`Restore “${snapshot.label}”? This changes configuration only; it does not restore or change books, members, loans, or accounts.`))return;
+    try { const result=await api<{message:string}>(`/api/settings/snapshots/${snapshot.id}/restore`,{method:'POST'});setNotice(result.message);setError(false);await load(); }
+    catch(cause) { flash(cause instanceof Error?cause.message:'Could not restore settings.',true); }
+  }
+
+  async function downloadBackup() {
+    try {
+      const response=await fetch('/api/admin/backup',{credentials:'same-origin'});
+      if(!response.ok){const body=await response.json().catch(()=>({error:'Could not create backup.'}));throw new Error(body.error||'Could not create backup.');}
+      const blob=await response.blob();const url=URL.createObjectURL(blob);const link=document.createElement('a');
+      link.href=url;link.download=`library-backup-${new Date().toISOString().slice(0,10)}.json`;link.click();URL.revokeObjectURL(url);
+      flash('Encrypted backup downloaded. Store the file and BACKUP_ENCRYPTION_KEY separately.');
+    } catch(cause) { flash(cause instanceof Error?cause.message:'Could not create backup.',true); }
+  }
+
+  async function restoreDataBackup(event:ChangeEvent<HTMLInputElement>) {
+    const file=event.currentTarget.files?.[0];event.currentTarget.value='';
+    if(!file)return;
+    if(file.size>16_000_000){flash('Backup file is too large.',true);return;}
+    try {
+      const backup=JSON.parse(await file.text()) as unknown;
+      if(!window.confirm('This will replace the current accounts, catalogue, members, loans, settings, and audit history with the encrypted backup. All sessions will be signed out. Continue?'))return;
+      const result=await api<{message:string}>('/api/admin/backup',{method:'POST',body:JSON.stringify({confirmation:'RESTORE',backup})});
+      flash(result.message);window.setTimeout(()=>window.location.reload(),1800);
+    } catch(cause) { flash(cause instanceof Error?cause.message:'Could not restore this backup.',true); }
   }
 
   async function changeRole(account:Account,role:Role) {
@@ -117,8 +163,8 @@ export function LibraryConsole({identity,onSignOut}:{identity:Identity;onSignOut
   }
 
   async function deleteAccount(account:Account) {
-    if(!window.confirm(`Permanently delete staff account ${account.username}?`))return;
-    try { await api(`/api/users/${account.id}`,{method:'DELETE'});flash('Account deleted.');await load(); }
+    if(!window.confirm(`Mark ${account.username} as deleted? The account row and history will be retained, and an admin can restore it later.`))return;
+    try { await api(`/api/users/${account.id}`,{method:'DELETE'});flash('Account marked deleted; its record was retained.');await load(); }
     catch(cause) { flash(cause instanceof Error?cause.message:'Could not delete account.',true); }
   }
 
@@ -133,11 +179,11 @@ export function LibraryConsole({identity,onSignOut}:{identity:Identity;onSignOut
   },[books,search]);
   const activeLoans=loans.filter(loan=>loan.status!=='returned');
   const overdue=activeLoans.filter(loan=>loan.status==='overdue').length;
-  const tabs: Array<{id:Tab;name:string}>=[{id:'overview',name:'Overview'},{id:'catalog',name:'Catalogue'},...(isStaff?[{id:'members' as Tab,name:'Members'},{id:'loans' as Tab,name:'Loans'}]:[]),...(isAdmin?[{id:'staff' as Tab,name:'Staff'}]:[]),{id:'security',name:'Security'}];
+  const tabs: Array<{id:Tab;name:string}>=[{id:'overview',name:'Overview'},{id:'catalog',name:'Catalogue'},...(isStaff?[{id:'members' as Tab,name:'Members'},{id:'loans' as Tab,name:'Loans'}]:[]),...(isAdmin?[{id:'staff' as Tab,name:'Admin'}]:[]),{id:'security',name:'Security'}];
 
   return <div className="library-shell">
     {notice&&<div className={`notice ${error?'notice-error':''}`} role={error?'alert':'status'}>{notice}</div>}
-    <section className="welcome-card library-welcome"><div><div className="section-kicker">LIBRARY OPERATIONS</div><h2>Good to see you, {identity.username}</h2><p className="muted">Signed in as <span className={`role-chip role-${identity.role}`}>{labelRole(identity.role)}</span></p></div><button className="quiet-button" onClick={onSignOut}>Sign out</button></section>
+    <section className="welcome-card library-welcome"><div><div className="section-kicker">{settings.library_name.toUpperCase()}</div><h2>Good to see you, {identity.username}</h2><p className="muted">Signed in as <span className={`role-chip role-${identity.role}`}>{labelRole(identity.role)}</span></p></div><button className="quiet-button" onClick={onSignOut}>Sign out</button></section>
     <nav className="library-tabs" aria-label="Library sections">{tabs.map(item=><button key={item.id} className={tab===item.id?'active':''} onClick={()=>{setTab(item.id);setEditingBook(null);setEditingMember(null);}}>{item.name}</button>)}</nav>
 
     {tab==='overview'&&<>
@@ -165,14 +211,18 @@ export function LibraryConsole({identity,onSignOut}:{identity:Identity;onSignOut
 
     {tab==='loans'&&isStaff&&<>
       <section className="content-card"><div className="card-heading"><div><div className="section-kicker">CIRCULATION DESK</div><h3>Check out a book</h3></div><span className="small-tag">Inventory updates automatically</span></div>
-        <form className="library-form" onSubmit={event=>void submit(event,checkout)}><label>Available book<select name="book_id" required defaultValue=""><option value="" disabled>Select a title</option>{books.filter(book=>book.copies_available>0).map(book=><option key={book.id} value={book.id}>{book.title} ({book.copies_available} available)</option>)}</select></label><label>Active member<select name="member_id" required defaultValue=""><option value="" disabled>Select a member</option>{members.filter(member=>member.active).map(member=><option key={member.id} value={member.id}>{member.full_name} · {member.member_code}</option>)}</select></label><label>Due date<input name="due_at" type="date" min={new Date().toISOString().slice(0,10)} defaultValue={dateAfterDays(14)} required/></label><div className="form-actions"><button className="primary" disabled={busy||!books.some(book=>book.copies_available>0)||!members.some(member=>member.active)}>Check out</button></div></form>
+        <form key={`checkout-${settings.default_loan_days}`} className="library-form" onSubmit={event=>void submit(event,checkout)}><label>Available book<select name="book_id" required defaultValue=""><option value="" disabled>Select a title</option>{books.filter(book=>book.copies_available>0).map(book=><option key={book.id} value={book.id}>{book.title} ({book.copies_available} available)</option>)}</select></label><label>Active member<select name="member_id" required defaultValue=""><option value="" disabled>Select a member</option>{members.filter(member=>member.active).map(member=><option key={member.id} value={member.id}>{member.full_name} · {member.member_code}</option>)}</select></label><label>Due date<input name="due_at" type="date" min={new Date().toISOString().slice(0,10)} defaultValue={dateAfterDays(settings.default_loan_days)} required/></label><div className="form-actions"><button className="primary" disabled={busy||!books.some(book=>book.copies_available>0)||!members.some(member=>member.active)}>Check out</button></div></form>
       </section>
       <section className="content-card"><div className="card-heading"><div><div className="section-kicker">CIRCULATION HISTORY</div><h3>Loans and returns</h3></div><span className="count-tag">{activeLoans.length} active</span></div><div className="table-scroll"><table><thead><tr><th>BOOK</th><th>MEMBER</th><th>CHECKED OUT</th><th>DUE DATE</th><th>STATUS</th><th>ACTION</th></tr></thead><tbody>{loans.map(loan=><tr key={loan.id}><td className="username-cell">{loan.book_title}<small className="table-subline">{loan.isbn||'No ISBN'}</small></td><td>{loan.member_name}<small className="table-subline">{loan.member_code}</small></td><td>{new Date(loan.checked_out_at).toLocaleDateString()}</td><td>{new Date(`${loan.due_at}T00:00:00`).toLocaleDateString()}</td><td><span className={`loan-status loan-${loan.status}`}>{loan.status.replace('_',' ')}</span></td><td>{loan.status!=='returned'&&<button className="mini-button" onClick={()=>void returnBook(loan)}>Record return</button>}</td></tr>)}</tbody></table>{loans.length===0&&<p className="empty-state">No books have been checked out yet.</p>}</div></section>
     </>}
 
     {tab==='staff'&&isAdmin&&<>
-      <section className="content-card"><div className="card-heading"><div><div className="section-kicker">STAFF ACCESS</div><h3>Create an inputer account</h3></div><span className="small-tag">New staff start with catalogue entry access</span></div><form className="create-grid" onSubmit={event=>void submit(event,createStaff)}><label>Username<input name="username" required minLength={3} maxLength={64} pattern="[A-Za-z0-9_.-]+"/></label><label>Temporary password <small>At least 12 characters</small><input name="password" type="password" autoComplete="new-password" required minLength={12} maxLength={256}/></label><button className="primary" disabled={busy}>Create inputer</button></form></section>
-      <section className="content-card"><div className="card-heading"><div><div className="section-kicker">ACCOUNT CONTROL</div><h3>Staff accounts</h3></div><span className="count-tag">{accounts.length} accounts</span></div><div className="table-scroll"><table><thead><tr><th>USERNAME</th><th>ROLE</th><th>STATUS</th><th>CREATED</th><th>ACTIONS</th></tr></thead><tbody>{accounts.map(account=><tr key={account.id}><td className="username-cell">{account.username}</td><td><select aria-label={`Role for ${account.username}`} value={account.role} disabled={account.id===identity.id} onChange={event=>void changeRole(account,event.target.value as Role)}><option value="user">Reader</option><option value="inputer">Inputer</option><option value="manager">Manager</option><option value="admin">Admin</option></select></td><td><span className={`status ${account.active?'':'status-disabled'}`}><i/>{account.active?'Active':'Disabled'}</span></td><td>{new Date(account.created_at).toLocaleDateString()}</td><td className="actions">{account.id!==identity.id&&<><button className="mini-button" onClick={()=>void toggleAccount(account)}>{account.active?'Disable':'Enable'}</button><button className="mini-button danger" onClick={()=>void deleteAccount(account)}>Delete</button></>}</td></tr>)}</tbody></table></div></section>
+      <section className="content-card"><div className="card-heading"><div><div className="section-kicker">USER ACCESS</div><h3>Create an account</h3></div><span className="small-tag">New users set up MFA on their first sign-in</span></div><form className="create-grid" onSubmit={event=>void submit(event,createStaff)}><label>Username<input name="username" required minLength={3} maxLength={64} pattern="[A-Za-z0-9_.-]+"/></label><label>Temporary password <small>At least 12 characters</small><input name="password" type="password" autoComplete="new-password" required minLength={12} maxLength={256}/></label><label>Role<select name="role" defaultValue="inputer"><option value="admin">Admin</option><option value="manager">Manager</option><option value="inputer">Inputer</option><option value="user">Reader</option></select></label><button className="primary" disabled={busy}>Create account</button></form></section>
+      <section className="content-card"><div className="card-heading"><div><div className="section-kicker">ACCOUNT CONTROL</div><h3>All account records</h3></div><span className="count-tag">{accounts.length} accounts</span></div><div className="table-scroll"><table><thead><tr><th>USERNAME</th><th>ROLE</th><th>STATUS</th><th>CREATED</th><th>ACTIONS</th></tr></thead><tbody>{accounts.map(account=><tr key={account.id}><td className="username-cell">{account.username}</td><td><select aria-label={`Role for ${account.username}`} value={account.role} disabled={account.id===identity.id||Boolean(account.deleted_at)} onChange={event=>void changeRole(account,event.target.value as Role)}><option value="user">Reader</option><option value="inputer">Inputer</option><option value="manager">Manager</option><option value="admin">Admin</option></select></td><td><span className={`status ${account.active&&!account.deleted_at?'':'status-disabled'}`}><i/>{account.deleted_at?'Deleted':account.active?'Active':'Disabled'}</span></td><td>{new Date(account.created_at).toLocaleDateString()}</td><td className="actions">{account.id!==identity.id&&<><button className="mini-button" onClick={()=>void toggleAccount(account)}>{account.deleted_at?'Restore':account.active?'Disable':'Enable'}</button>{!account.deleted_at&&<button className="mini-button danger" onClick={()=>void deleteAccount(account)}>Mark deleted</button>}</>}</td></tr>)}</tbody></table></div></section>
+      <section className="content-card"><div className="card-heading"><div><div className="section-kicker">SYSTEM SETTINGS</div><h3>Library configuration</h3></div><span className="small-tag">Configuration changes do not modify catalogue records</span></div><form key={`${settings.library_name}:${settings.default_loan_days}:${settings.max_active_loans}`} className="library-form" onSubmit={event=>void submit(event,saveSettings)}><label>Library name<input name="library_name" required maxLength={80} defaultValue={settings.library_name}/></label><label>Default loan period (days)<input name="default_loan_days" type="number" min="1" max="90" required defaultValue={settings.default_loan_days}/></label><label>Maximum active loans per member<input name="max_active_loans" type="number" min="1" max="50" required defaultValue={settings.max_active_loans}/></label><button className="primary" disabled={busy}>Save configuration</button></form></section>
+      <section className="content-card"><div className="card-heading"><div><div className="section-kicker">CURRENT DATABASE STATE</div><h3>Rows currently stored</h3></div><span className="small-tag">Live counts · all rows, including deleted accounts</span></div><div className="library-metrics row-counts"><article><span>User records</span><b>{rowCounts.users}</b></article><article><span>Book rows</span><b>{rowCounts.books}</b></article><article><span>Member rows</span><b>{rowCounts.members}</b></article><article><span>Loan rows</span><b>{rowCounts.loans}</b></article></div></section>
+      <section className="content-card"><div className="card-heading"><div><div className="section-kicker">CONFIGURATION RESTORE POINTS</div><h3>Save or restore settings</h3><p className="muted">A restore point stores settings only. Restoring it never changes books, members, loans, or user accounts.</p></div><button className="primary" onClick={()=>void createConfigSnapshot()}>Save restore point</button></div><div className="table-scroll"><table><thead><tr><th>LABEL</th><th>CREATED BY</th><th>DATE</th><th>ACTION</th></tr></thead><tbody>{snapshots.map(snapshot=><tr key={snapshot.id}><td>{snapshot.label}</td><td>{snapshot.created_by||'System'}</td><td>{new Date(snapshot.created_at).toLocaleString()}</td><td><button className="mini-button" onClick={()=>void restoreConfigSnapshot(snapshot)}>Restore settings</button></td></tr>)}</tbody></table>{snapshots.length===0&&<p className="empty-state">No configuration restore points yet.</p>}</div></section>
+      <section className="content-card"><div className="card-heading"><div><div className="section-kicker">ENCRYPTED DATABASE BACKUP</div><h3>Export or restore the full system</h3><p className="muted">Backups include account hashes, MFA ciphertext, library records, settings, and audit history. The file is encrypted before download.</p></div></div><div className="form-actions"><button className="primary" onClick={()=>void downloadBackup()}>Download encrypted backup</button><label className="mini-button file-restore">Choose backup to restore<input type="file" accept="application/json,.json" onChange={event=>void restoreDataBackup(event)}/></label></div><p className="muted">Restoring replaces current database records and signs out all sessions. The backup and the same BACKUP_ENCRYPTION_KEY, AUTH_PEPPER, and MFA_ENCRYPTION_KEY are needed to recover accounts.</p></section>
       <section className="content-card"><div className="card-heading"><div><div className="section-kicker">AUDIT</div><h3>Recent security and library events</h3></div><span className="small-tag">Latest 200</span></div><div className="table-scroll"><table><thead><tr><th>TIME</th><th>ACTOR</th><th>EVENT</th><th>TARGET</th><th>RESULT</th></tr></thead><tbody>{events.map((event,index)=><tr key={`${event.created_at}-${index}`}><td>{new Date(event.created_at).toLocaleString()}</td><td>{event.actor_id??'—'}</td><td>{event.action}</td><td>{event.target??'—'}</td><td>{event.outcome}</td></tr>)}</tbody></table></div></section>
     </>}
 

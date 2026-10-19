@@ -29,7 +29,7 @@ Next.js UI and Node.js route handlers
        Supabase PostgreSQL
 ```
 
-The application server is the security boundary between the browser and the database. The client does not receive the database connection string, pepper, MFA encryption key, or Google client secret. The database schema contains authentication tables (`users`, `sessions`, `pending_mfa`, `recovery_codes`, `login_attempts`, `audit_events`) and library tables (`books`, `library_members`, `loans`). Foreign keys and indexes support referential integrity and common lookups. Row Level Security (RLS) is enabled on all tables, with no public Data API policies defined in the project schema. The application connects through its server-side PostgreSQL connection.
+The application server is the security boundary between the browser and the database. The client does not receive the database connection string, pepper, MFA encryption key, backup encryption key, or Google client secret. The database schema contains authentication tables (`users`, `sessions`, `pending_mfa`, `recovery_codes`, `login_attempts`, `audit_events`), library tables (`books`, `library_members`, `loans`), and configuration tables (`system_settings`, `system_config_snapshots`). Foreign keys and indexes support referential integrity and common lookups. Row Level Security (RLS) is enabled on all tables, with no public Data API policies defined in the project schema. The application connects through its server-side PostgreSQL connection.
 
 Supabase PostgreSQL is hosted, so the current Supabase-backed application is not an offline or air-gapped system; the server needs network access to the database. The repository also contains a SQLite-to-Supabase migration tool, but there is no automatic offline database fallback in the deployed application.
 
@@ -42,11 +42,14 @@ Supabase PostgreSQL is hosted, so the current Supabase-backed application is not
 | `src/lib/auth.ts` | Session lifecycle, attempt throttling, recovery codes, audit writes, and role checks. |
 | `src/lib/mfa.ts` | TOTP creation, verification, encrypted setup state, and QR provisioning. |
 | `src/lib/db.ts` | Server-only PostgreSQL pool, parameterized query helpers, and transactions. |
+| `src/lib/backup.ts` and `src/app/api/admin/backup` | Authenticated AES-256-GCM encrypted database exports and transactional restores. |
+| `src/app/api/settings` | Admin-managed library settings and configuration-only restore points. |
 | `src/components/library-console.tsx` | Interactive catalogue, member, circulation, and staff screens. |
 | `src/app/api/books`, `members`, `loans` | Protected catalogue, member, and circulation APIs. |
 | `supabase/schema.sql` | PostgreSQL tables, constraints, indexes, and RLS enablement. |
 | `scripts/migrate-sqlite-to-supabase.mjs` | Read-only SQLite source migration into an empty Supabase schema, using a transaction. |
 | `scripts/create-admin.mjs` | Interactive initial administrator creation; the entered password is not echoed. |
+| `scripts/seed-demo-users.mjs` | Test-only creation of four role examples with generated passwords and salted hashes. |
 
 ## 3. Identity, authentication, and account lifecycle
 
@@ -78,7 +81,7 @@ Authorization is enforced in server route handlers on every protected request. H
 
 | Role | Implemented access |
 | --- | --- |
-| **Admin** | Create, disable, re-enable, assign roles, or delete staff accounts; manage books and members; issue and return books; delete books without loan history; view audit events. Cannot change/delete own signed-in account. The final active admin cannot be demoted, disabled, or deleted. |
+| **Admin** | Create accounts in any role; disable, re-enable, soft-delete, and restore accounts; modify library configuration; create configuration restore points; export and restore encrypted backups; manage books and members; issue and return books; delete books without loan history; view audit events. Cannot change/delete own signed-in account. The final active admin cannot be demoted, disabled, or soft-deleted. |
 | **Manager** | Add/edit books; manage member records; check out books and record returns; review overdue and circulation status. Cannot manage staff roles or permanently delete books. |
 | **Inputer** | Routine book, member, checkout, and return data entry. Cannot manage staff accounts or delete books. |
 | **Reader (`user`)** | Search and read the catalogue only; no member-contact, loan, or staff-management access. Public registration and new Google accounts receive this role. |
@@ -89,7 +92,7 @@ New registration and Google-created accounts always receive `user`. Only the adm
 
 Staff can search and add books with ISBN, title, author, category, publisher, year, and copy counts. Updates lock the selected inventory row and preserve the number of copies already checked out. Checkout locks the book and member rows in one transaction, confirms an active member and an available copy, reduces availability, and creates the loan. Return locks the loan, refuses duplicate returns, marks it returned, and restores one available copy in the same transaction. This protects inventory counts during concurrent requests.
 
-Member contact details are restricted to admin, manager, and inputer roles. A member with an open loan cannot be deactivated. Loan history is preserved: books referenced by loans cannot be deleted, and member records have no hard-delete route. Readers only receive catalogue data. This starter has no reservations, fines, barcode scanning, multi-branch stock, email reminders, or patron self-service borrowing history.
+Member contact details are restricted to admin, manager, and inputer roles. A member with an open loan cannot be deactivated. Loan history is preserved: books referenced by loans cannot be deleted, and member records have no hard-delete route. User deletion is a soft delete: it sets the account inactive, increments the session version, and keeps the row and relationships for history. Admins can restore deleted accounts. Readers only receive catalogue data. This starter has no reservations, fines, barcode scanning, multi-branch stock, email reminders, or patron self-service borrowing history.
 
 ## 5. Mapping to information-security principles
 
@@ -99,7 +102,7 @@ Member contact details are restricted to admin, manager, and inputer roles. A me
 | --- | --- | --- | --- |
 | **Confidentiality** | Prevent disclosure to unauthorized parties. | Argon2id password hashes; separate pepper; encrypted TOTP seeds; hashed session tokens and recovery codes; HttpOnly cookies; server-only database connection; role checks restrict member contacts and loans to staff; verified TLS to PostgreSQL; limited Google scopes (`openid email`). | A compromised application server, leaked environment secrets, privileged database credential, browser malware, or misconfigured hosting can expose data. Backups and secrets need protected storage and access controls. |
 | **Integrity** | Prevent or detect unauthorized/incorrect changes. | Parameterized SQL; role checks for mutations; same-origin check on state-changing routes; MFA confirmation for password changes; database constraints/foreign keys; row locks and transactions for checkout, return, and inventory edits; audit events for selected authentication and library actions. | The application database credential can make writes directly; RLS has no public policies but is not a substitute for application authorization. Audit rows live in the same database and are not tamper-proof against a sufficiently privileged database operator. |
-| **Availability** | Ensure authorized users can access the service and data when needed. | Login throttling; short DB connection timeout; indexes for catalogue/member/loan/security queries; transaction-safe copy tracking; Supabase-hosted database; admin lockout protections. | No documented backup/restore test, high-availability target, incident response, alerting, resource quotas, or distributed IP-based rate limiting. A database/provider outage or denial-of-service can prevent sign-in and circulation. |
+| **Availability** | Ensure authorized users can access the service and data when needed. | Login throttling; short DB connection timeout; indexes for catalogue/member/loan/security queries; transaction-safe copy tracking; Supabase-hosted database; admin lockout protections; encrypted export and restore. | Backup restoration has not been independently rehearsed; no high-availability target, incident response, alerting, resource quotas, automated offsite backup, or distributed IP-based rate limiting. A database/provider outage or denial-of-service can prevent sign-in and circulation. |
 
 ### Other principles and how they appear
 
@@ -130,7 +133,7 @@ Member contact details are restricted to admin, manager, and inputer roles. A me
 | Google OAuth mix-up or forged identity token | State, nonce, PKCE verifier, signature/JWK validation, issuer/audience/algorithm checks, verified email and stable subject validation. | External Google availability and correct OAuth-console redirect configuration are required; account recovery and identity provider incidents remain external dependencies. |
 | SQL injection | Values are supplied as query parameters; role-specific table/column choices are server-controlled. | Any future dynamic SQL identifiers must be allow-listed; review every new query. |
 | Database network interception | PostgreSQL TLS uses `rejectUnauthorized: true` and optionally the configured Supabase CA certificate. | Host/cloud TLS and secret configuration must remain correct; certificate/connection failures can stop the service. |
-| Destructive administrator error or compromise | Last-admin safeguards, inability to self-disable/delete, role separation, and audit entries. | No multi-person approval, soft-delete recovery, or immutable external audit sink. Admin accounts remain high-value targets. |
+| Destructive administrator error or compromise | Last-admin safeguards, inability to self-disable/delete, role separation, soft-delete recovery, encrypted backup restore, and audit entries. | No multi-person approval or immutable external audit sink. Admin accounts remain high-value targets. |
 
 ## 7. Security event logging and database records
 
@@ -143,6 +146,7 @@ Principal sensitive data is handled as follows:
 | Password | Never stored in plaintext; HMAC-derived material is hashed by Argon2id, including its random salt and work parameters in the encoded value. |
 | Password pepper | `AUTH_PEPPER` server secret, separate from database. |
 | MFA TOTP seed | AES-256-GCM ciphertext in PostgreSQL; decryption key in `MFA_ENCRYPTION_KEY`. Pending enrollment seeds are encrypted too. |
+| Downloaded database backup | AES-256-GCM encrypted with a separate server key in `BACKUP_ENCRYPTION_KEY`; the encrypted file contains password hashes and MFA ciphertext. |
 | Recovery code | Plaintext shown once; HMAC digest plus use timestamp stored in PostgreSQL. |
 | Browser session | Random opaque token in HttpOnly cookie; SHA-256 digest stored in PostgreSQL. |
 | Google credentials | Client ID and client secret in server environment; secret is never placed in client code. |
@@ -150,11 +154,11 @@ Principal sensitive data is handled as follows:
 
 ## 8. Deployment and operational security
 
-For local development, run the Next.js server on loopback. Do not expose the development server directly to the public internet. For hosted deployment, use the production Node.js runtime, HTTPS, a stable `APP_ORIGIN`, and the Supabase Transaction Pooler connection URI appropriate for serverless deployment. Configure `DATABASE_CA_CERT` with the trusted certificate PEM if required by the database endpoint; TLS verification remains enabled. Put `DATABASE_URL`, `DATABASE_CA_CERT`, `AUTH_PEPPER`, `MFA_ENCRYPTION_KEY`, `GOOGLE_CLIENT_ID`, and `GOOGLE_CLIENT_SECRET` in the hosting provider's server-side environment settings. Never commit `.env.local`, certificates, connection strings, peppers, encryption keys, or OAuth secrets.
+For local development, run the Next.js server on loopback. Do not expose the development server directly to the public internet. For hosted deployment, use the production Node.js runtime, HTTPS, a stable `APP_ORIGIN`, and the Supabase Transaction Pooler connection URI appropriate for serverless deployment. Configure `DATABASE_CA_CERT` with the trusted certificate PEM if required by the database endpoint; TLS verification remains enabled. Put `DATABASE_URL`, `DATABASE_CA_CERT`, `AUTH_PEPPER`, `MFA_ENCRYPTION_KEY`, `BACKUP_ENCRYPTION_KEY`, `GOOGLE_CLIENT_ID`, and `GOOGLE_CLIENT_SECRET` in the hosting provider's server-side environment settings. Never commit `.env.local`, certificates, connection strings, peppers, encryption keys, or OAuth secrets.
 
 Google Cloud's authorized origin and redirect URI must match the deployed HTTPS domain exactly; the callback path is `/api/auth/google/callback`. After changing environment variables in Vercel, redeploy so the runtime receives the updated values. Production and preview environments should be isolated; preview builds should not receive access to production data unless that access is explicitly intended and protected.
 
-Back up the PostgreSQL database and both cryptographic secrets under separate access controls. A database backup without the matching pepper and MFA key may be unusable for password verification or MFA seed decryption. Conversely, secrets alone are not a backup of account data. Recovery procedures and restoration should be rehearsed.
+The admin console can download and restore full-system data backups encrypted with AES-256-GCM. Configuration-only restore points are separate and affect only `system_settings`. Full backup restoration replaces current users, library data, configuration, and audit rows and deletes active sessions. The same `BACKUP_ENCRYPTION_KEY` decrypts the file; the matching `AUTH_PEPPER` and `MFA_ENCRYPTION_KEY` are also needed to use restored password hashes and MFA seeds. Keep keys separately from backup files. Automated AWS S3 upload, offsite retention, monitoring, and a rehearsed recovery plan are not implemented yet.
 
 ## 9. Current limitations and recommended next work
 
@@ -162,7 +166,7 @@ This is a learning/starter implementation. Before using it for sensitive or regu
 
 1. Independent application and infrastructure security review; threat model and route-by-route access-control tests.
 2. Distributed rate limiting, IP/device abuse controls, and alerting for suspicious authentication and administrator actions.
-3. Protected, monitored backups and a tested recovery plan for both database and key material; documented key rotation.
+3. Automated protected offsite backups (for example, private AWS S3 storage), retention monitoring, and a tested recovery plan for database and key material; documented key rotation.
 4. A secure MFA reset/account recovery process with identity proofing, audit, notifications, and protection from social engineering.
 5. External append-only audit export, explicit retention rules, monitoring, and incident-response procedures.
 6. A deployment security header policy (including a carefully tested Content Security Policy), dependency update process, vulnerability scanning, and production error handling that avoids disclosing internals.

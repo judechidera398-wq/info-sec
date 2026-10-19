@@ -1,4 +1,4 @@
-import { audit, addAttempt, createPendingSession, fail, isRateLimited, isSameOrigin, ok, putSessionCookie } from '@/lib/auth';
+import { audit, addAttempt, createPendingSession, fail, isMobileRequest, isRateLimited, isSameOrigin, ok, putSessionCookie } from '@/lib/auth';
 import { one } from '@/lib/db';
 import { verifyPassword } from '@/lib/security';
 
@@ -21,7 +21,7 @@ export async function POST(request: Request) {
     return fail('Invalid username or password', 401);
   }
   const session = await createPendingSession(user.id, user.session_version);
-  await putSessionCookie(session.token);
+  if (!isMobileRequest(request)) await putSessionCookie(session.token);
   await audit(user.id, 'auth.password', username);
-  return ok({ mfaRequired: true, mfaEnrolled: !!user.totp_secret });
+  return ok({ mfaRequired: true, mfaEnrolled: !!user.totp_secret, ...(isMobileRequest(request) ? { pendingToken: session.token } : {}) });
 }

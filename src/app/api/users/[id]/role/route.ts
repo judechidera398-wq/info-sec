@@ -14,8 +14,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   const validRoles: Role[] = ['admin','manager','inputer','user'];
   if (!Number.isSafeInteger(id) || id < 1 || typeof body?.role !== 'string' || !validRoles.includes(body.role as Role)) return fail('Invalid request');
   if (session.userId === id) return fail('You cannot change your own role.');
-  const target = await one<{username:string;role:Role}>('SELECT username,role FROM users WHERE id=$1', [id]);
+  const target = await one<{username:string;role:Role;deleted_at:string|null}>('SELECT username,role,deleted_at FROM users WHERE id=$1', [id]);
   if (!target) return fail('User not found', 404);
+  if (target.deleted_at) return fail('Restore this account before changing its role', 409);
   if (target.role === 'admin' && body.role !== 'admin') {
     const admins = await one<{n:number}>("SELECT COUNT(*)::int AS n FROM users WHERE role='admin' AND active=1");
     if ((admins?.n ?? 0) <= 1) return fail('Cannot demote the last active administrator', 409);
