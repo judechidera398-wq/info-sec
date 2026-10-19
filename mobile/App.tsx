@@ -1,14 +1,19 @@
 import { StatusBar } from 'expo-status-bar';
+import * as Crypto from 'expo-crypto';
 import * as SecureStore from 'expo-secure-store';
+import * as WebBrowser from 'expo-web-browser';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Image, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Image, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 const API_URL = (process.env.EXPO_PUBLIC_API_URL || 'https://infosec-one.vercel.app').replace(/\/$/, '');
 const TOKEN_KEY = 'library_access_token';
+const GOOGLE_REDIRECT = 'vaultofvalue://oauth/callback';
 type User = { id: number; username: string; role: string };
 type Book = { id: number; title: string; author: string; category: string; copies_available: number; copies_total: number };
 type Row = Record<string, string | number | null>;
 type MfaSetup = { secret: string; qr: string };
+
+WebBrowser.maybeCompleteAuthSession();
 
 async function api<T>(path: string, token?: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
@@ -79,6 +84,47 @@ export default function App() {
     finally { setBusy(false); }
   }
 
+  async function signInWithGoogle() {
+    setBusy(true); setError('');
+    try {
+      if (Platform.OS === 'web') {
+        window.location.assign(`${API_URL}/api/auth/google`);
+        return;
+      }
+      const verifierBytes = await Crypto.getRandomBytesAsync(32);
+      const verifier = Array.from(verifierBytes, value => value.toString(16).padStart(2, '0')).join('');
+      const handoffChallenge = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, verifier);
+      const authUrl = new URL('/api/auth/google', `${API_URL}/`);
+      authUrl.searchParams.set('client', 'mobile');
+      authUrl.searchParams.set('handoff_challenge', handoffChallenge);
+      const result = await WebBrowser.openAuthSessionAsync(
+        authUrl.toString(), GOOGLE_REDIRECT,
+      );
+      if (result.type !== 'success') return;
+      const callback = new URL(result.url);
+      const callbackError = callback.searchParams.get('error');
+      if (callbackError) throw new Error(callbackError === 'unconfigured'
+        ? 'Google sign-in is not configured on the server.'
+        : 'Google sign-in could not be completed. Please try again.');
+      const ticket = callback.searchParams.get('ticket');
+      if (!ticket) throw new Error('Google did not return a sign-in ticket. Please try again.');
+      const exchange = await api<{ pendingToken: string; mfaEnrolled: boolean }>(
+        '/api/auth/google/exchange', undefined, { method: 'POST', body: JSON.stringify({ ticket, verifier }) },
+      );
+      setPendingToken(exchange.pendingToken);
+      setEnrolled(exchange.mfaEnrolled);
+      setUseRecoveryCode(false);
+      if (!exchange.mfaEnrolled) {
+        const data = await api<MfaSetup>('/api/auth/mfa-setup', exchange.pendingToken);
+        setSetup(data);
+      }
+    } catch (e) {
+      setError((e as Error).message || 'Google sign-in could not be completed. Please try again.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function finishMfa() {
     if (!pendingToken) return;
     setBusy(true); setError('');
@@ -123,6 +169,10 @@ export default function App() {
         <Text style={styles.label}>USERNAME</Text><TextInput value={username} onChangeText={setUsername} placeholder="Your username" placeholderTextColor="#70817b" autoCapitalize="none" style={styles.input} />
         <Text style={styles.label}>PASSWORD</Text><TextInput value={password} onChangeText={setPassword} placeholder="Your password" placeholderTextColor="#70817b" secureTextEntry style={styles.input} onSubmitEditing={signIn} />
         <Pressable onPress={signIn} disabled={busy || !username || !password} style={[styles.primary, (busy || !username || !password) && styles.disabled]}>{busy ? <ActivityIndicator color="#06100c" /> : <Text style={styles.primaryText}>CONTINUE SECURELY</Text>}</Pressable>
+        <View style={styles.divider}><View style={styles.dividerLine} /><Text style={styles.dividerText}>OR</Text><View style={styles.dividerLine} /></View>
+        <Pressable onPress={signInWithGoogle} disabled={busy} style={[styles.googleButton, busy && styles.disabled]}>
+          {busy ? <ActivityIndicator color="#16251c" /> : <><Text style={styles.googleMark}>G</Text><Text style={styles.googleLabel}>CONTINUE WITH GOOGLE</Text></>}
+        </Pressable>
       </>}
       {!!error && <Text style={styles.error}>{error}</Text>}
       <Text style={styles.footnote}>Protected with two-factor authentication</Text>
@@ -152,6 +202,7 @@ const styles = StyleSheet.create({
   brand: { color: '#eef6f0', letterSpacing: 2.4, fontSize: 16, fontWeight: '900' }, brandAccent: { color: '#59d58a' }, topSub: { color: '#80928a', fontSize: 8, letterSpacing: 2.1, marginTop: 3 }, statusDot: { width: 9, height: 9, backgroundColor: '#59d58a', borderRadius: 10 },
   authWrap: { padding: 24, paddingTop: 54, flexGrow: 1 }, kicker: { color: '#59d58a', fontSize: 10, letterSpacing: 2, fontWeight: '800', marginBottom: 12 }, heading: { color: '#f1f6f2', fontSize: 32, fontWeight: '700', letterSpacing: -0.8 }, subheading: { color: '#98a9a0', fontSize: 14, lineHeight: 21, marginTop: 9, marginBottom: 32 }, label: { color: '#a9b8b0', fontSize: 10, letterSpacing: 1.6, fontWeight: '700', marginBottom: 9, marginTop: 20 }, input: { borderWidth: 1, borderColor: '#294235', borderRadius: 12, backgroundColor: '#0c1912', color: '#edf6f0', paddingHorizontal: 15, height: 52, fontSize: 15 },
   primary: { height: 54, borderRadius: 12, marginTop: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: '#63dd91' }, primaryText: { color: '#07140c', fontSize: 11, fontWeight: '900', letterSpacing: 1.3 }, disabled: { opacity: 0.55 }, link: { textAlign: 'center', marginTop: 22, color: '#74dda0', fontSize: 13 }, footnote: { color: '#708178', fontSize: 11, textAlign: 'center', marginTop: 34 }, error: { color: '#ff9f9f', marginTop: 16, lineHeight: 20, textAlign: 'center' },
+  divider: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 22 }, dividerLine: { flex: 1, height: 1, backgroundColor: '#26392e' }, dividerText: { color: '#77877e', fontSize: 10, fontWeight: '700', letterSpacing: 1.5 }, googleButton: { height: 52, borderRadius: 12, marginTop: 18, borderWidth: 1, borderColor: '#d9e3dc', backgroundColor: '#f6faf7', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 11 }, googleMark: { color: '#4285F4', fontSize: 18, fontWeight: '900' }, googleLabel: { color: '#17251d', fontSize: 10, fontWeight: '900', letterSpacing: 1.1 },
   codeInput: { textAlign: 'center', letterSpacing: 8, fontSize: 22 }, qrCard: { padding: 18, borderWidth: 1, borderColor: '#294235', backgroundColor: '#0c1912', borderRadius: 16, alignItems: 'center', marginBottom: 20 }, qr: { width: 180, height: 180, marginBottom: 14, backgroundColor: '#fff' }, smallMuted: { color: '#90a199', fontSize: 11, marginTop: 8, textAlign: 'center' }, secret: { color: '#dbebe0', fontSize: 13, letterSpacing: 1.4, marginTop: 7 },
   content: { padding: 20, paddingBottom: 30 }, welcome: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 22 }, welcomeSub: { color: '#879990', fontSize: 13, marginTop: 7, marginBottom: 22 }, white: { color: '#e9f4ec' }, rolePill: { borderWidth: 1, borderColor: '#315642', backgroundColor: '#10251a', borderRadius: 30, paddingVertical: 8, paddingHorizontal: 12 }, roleText: { color: '#75dfa0', fontWeight: '800', fontSize: 9, letterSpacing: 1.2 }, statCard: { backgroundColor: '#0e1e15', borderColor: '#20382a', borderWidth: 1, borderRadius: 15, padding: 18, marginBottom: 15 }, stat: { color: '#65dc93', fontWeight: '700', fontSize: 30 }, statLabel: { color: '#8da096', fontWeight: '700', fontSize: 9, letterSpacing: 1.6, marginTop: 4 },
   bookCard: { flexDirection: 'row', alignItems: 'center', padding: 14, borderRadius: 14, borderWidth: 1, borderColor: '#1e3327', backgroundColor: '#0b1710', marginTop: 10 }, bookIcon: { width: 42, height: 48, borderRadius: 8, backgroundColor: '#163323', alignItems: 'center', justifyContent: 'center', marginRight: 12 }, bookIconText: { color: '#71e19d', fontSize: 17, fontWeight: '800' }, bookInfo: { flex: 1 }, bookTitle: { color: '#eaf3ed', fontSize: 14, fontWeight: '700' }, bookAuthor: { color: '#91a198', fontSize: 12, marginTop: 5 }, bookCategory: { color: '#5bc984', fontSize: 9, letterSpacing: 1, fontWeight: '700', marginTop: 7 }, available: { color: '#6de09a', fontSize: 11, fontWeight: '700' }, unavailable: { color: '#ff9c9c' }, empty: { color: '#95a69d', textAlign: 'center', marginTop: 40 },

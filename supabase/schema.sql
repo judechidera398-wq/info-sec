@@ -69,6 +69,18 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS mobile_oauth_tickets (
+  ticket_hash TEXT PRIMARY KEY,
+  session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  handoff_challenge TEXT NOT NULL,
+  expires_at BIGINT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE mobile_oauth_tickets ADD COLUMN IF NOT EXISTS handoff_challenge TEXT;
+UPDATE mobile_oauth_tickets SET handoff_challenge='' WHERE handoff_challenge IS NULL;
+ALTER TABLE mobile_oauth_tickets ALTER COLUMN handoff_challenge SET NOT NULL;
+CREATE INDEX IF NOT EXISTS mobile_oauth_tickets_expiry ON mobile_oauth_tickets(expires_at);
+
 CREATE TABLE IF NOT EXISTS pending_mfa (
   session_id INTEGER PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
   seed_ciphertext TEXT NOT NULL,
@@ -131,6 +143,7 @@ CREATE INDEX IF NOT EXISTS config_snapshots_by_created ON system_config_snapshot
 -- The Next.js server uses the private database connection; the public Data API gets no policies.
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE mobile_oauth_tickets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pending_mfa ENABLE ROW LEVEL SECURITY;
 ALTER TABLE recovery_codes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE login_attempts ENABLE ROW LEVEL SECURITY;

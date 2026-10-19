@@ -6,11 +6,11 @@ See [the system security and CIA Triad documentation](docs/system-security-and-c
 
 ## Expo mobile app
 
-The Expo app lives in [`mobile/`](mobile/). It supports password and authenticator MFA sign-in, catalogue search, and staff views for members and loans. It uses the same API and server-side role enforcement as the web app.
+The Expo app lives in [`mobile/`](mobile/). It supports password and authenticator MFA sign-in, Google sign-in, catalogue search, and staff views for members and loans. It uses the same API and server-side role enforcement as the web app.
 
-From the `mobile` folder, run `npm install`, copy `.env.example` to `.env` if you want to change the API URL, then run `npx expo start` and open the project in Expo Go. Expo Go targets the SDK 57 project template. Set `EXPO_PUBLIC_API_URL` to the deployed HTTPS origin for normal use. For local phone development, start Next.js from the repository root with `npm run dev:lan`, set the URL to `http://<your-computer-LAN-IP>:3000`, and keep both devices on the same trusted Wi-Fi. `localhost` on the phone refers to the phone itself; regular `npm run dev` remains loopback-only.
+From the `mobile` folder, run `npm install`, copy `.env.example` to `.env` if you want to change the API URL, then run `npx expo start`. Expo Go can run the password/MFA app, but Google OAuth requires a custom-scheme development build. Install Android Studio and run `npx expo run:android`, or use an EAS development build. Set `EXPO_PUBLIC_API_URL` to the deployed HTTPS origin for normal use. For local phone development, start Next.js from the repository root with `npm run dev:lan`, set the URL to `http://<your-computer-LAN-IP>:3000`, and keep both devices on the same trusted Wi-Fi. `localhost` on the phone refers to the phone itself; regular `npm run dev` remains loopback-only.
 
-Mobile Google sign-in is not wired yet; the existing Google OAuth callback is for the web app. Never put OAuth client secrets or server-side keys in Expo public environment variables.
+Before using mobile Google sign-in, run `supabase/mobile-google-oauth.sql` in the Supabase SQL Editor and deploy the updated Next.js API. Keep the Google OAuth client secret only in server-side environment variables. The existing Google web client callback remains `APP_ORIGIN/api/auth/google/callback`; no Google client secret belongs in Expo configuration.
 
 ## Requirements
 

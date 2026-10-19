@@ -5,6 +5,7 @@ import { appOrigin, cookieSecure } from '@/lib/env';
 export const runtime = 'nodejs';
 
 const GOOGLE_AUTH = 'https://accounts.google.com/o/oauth2/v2/auth';
+const MOBILE_REDIRECT = 'vaultofvalue://oauth/callback';
 const cookieOptions = {
   httpOnly: true,
   secure: cookieSecure,
@@ -13,11 +14,19 @@ const cookieOptions = {
   maxAge: 10 * 60,
 };
 
-export async function GET() {
+export async function GET(request: Request) {
+  const startUrl = new URL(request.url);
+  const mobile = startUrl.searchParams.get('client') === 'mobile';
+  const handoffChallenge = startUrl.searchParams.get('handoff_challenge') ?? '';
+  if (mobile && !/^[a-f0-9]{64}$/.test(handoffChallenge)) {
+    return NextResponse.redirect(new URL(`${MOBILE_REDIRECT}?error=invalid_request`));
+  }
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   if (!clientId || !clientSecret) {
-    return NextResponse.redirect(new URL('/?google=unconfigured', appOrigin));
+    return NextResponse.redirect(mobile
+      ? new URL(`${MOBILE_REDIRECT}?error=unconfigured`)
+      : new URL('/?google=unconfigured', appOrigin));
   }
 
   const state = randomBytes(32).toString('base64url');
@@ -41,5 +50,9 @@ export async function GET() {
   response.cookies.set('google_oauth_state', state, cookieOptions);
   response.cookies.set('google_oauth_nonce', nonce, cookieOptions);
   response.cookies.set('google_oauth_verifier', verifier, cookieOptions);
+  if (mobile) {
+    response.cookies.set('google_oauth_mobile', '1', cookieOptions);
+    response.cookies.set('google_oauth_mobile_challenge', handoffChallenge, cookieOptions);
+  }
   return response;
 }

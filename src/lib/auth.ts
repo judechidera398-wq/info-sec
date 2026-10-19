@@ -1,4 +1,5 @@
 import 'server-only';
+import { createHash } from 'node:crypto';
 import { cookies, headers } from 'next/headers';
 import { randomBytes } from 'node:crypto';
 import { one, run, transaction } from './db';
@@ -7,6 +8,7 @@ import { keyedDigest, randomToken, tokenDigest } from './security';
 
 const COOKIE = 'local_access_session';
 const SESSION_SECONDS = 30 * 60;
+const MOBILE_OAUTH_TICKET_SECONDS = 2 * 60;
 export type Role = 'admin' | 'manager' | 'inputer' | 'user';
 export type AuthSession = {
   sessionId: number; userId: number; username: string; role: Role;
@@ -29,7 +31,9 @@ export function isSameOrigin(request: Request): boolean {
   // The password login endpoint is public already; the marker lets the native
   // client call it without opening the other mutating endpoints to unauthenticated requests.
   const url = new URL(request.url);
-  return request.method === 'POST' && url.pathname === '/api/auth/login' && !bearer;
+  return request.method === 'POST'
+    && ['/api/auth/login', '/api/auth/google/exchange'].includes(url.pathname)
+    && !bearer;
 }
 
 export function isMobileRequest(request: Request): boolean {
@@ -56,6 +60,38 @@ export async function createPendingSession(userId: number, version: number): Pro
     return Number(result.rows[0].id);
   });
   return { id, token };
+}
+
+export async function createMobileOAuthTicket(sessionId: number, handoffChallenge: string): Promise<string> {
+  const ticket = randomToken();
+  const now = Math.floor(Date.now() / 1000);
+  await transaction(async (client) => {
+    await client.query('DELETE FROM mobile_oauth_tickets WHERE expires_at<$1', [now]);
+    await client.query('INSERT INTO mobile_oauth_tickets(ticket_hash,session_id,handoff_challenge,expires_at) VALUES($1,$2,$3,$4)',
+      [tokenDigest(ticket), sessionId, handoffChallenge, now + MOBILE_OAUTH_TICKET_SECONDS]);
+  });
+  return ticket;
+}
+
+export async function exchangeMobileOAuthTicket(ticket: string, verifier: string): Promise<{ pendingToken: string; mfaEnrolled: boolean } | null> {
+  if (!/^[a-f0-9]{64}$/.test(verifier)) return null;
+  const handoffChallenge = createHash('sha256').update(verifier).digest('hex');
+  const now = Math.floor(Date.now() / 1000);
+  return transaction(async (client) => {
+    const result = await client.query<{ sessionId: number; userId: number; sessionVersion: number; currentVersion: number; active: number; stage: string; expiresAt: number | string; mfaEnrolled: boolean }>(
+      `SELECT s.id AS "sessionId",s.user_id AS "userId",s.session_version AS "sessionVersion",u.session_version AS "currentVersion",
+        u.active,s.stage,s.expires_at AS "expiresAt",(u.totp_secret IS NOT NULL) AS "mfaEnrolled"
+       FROM mobile_oauth_tickets t JOIN sessions s ON s.id=t.session_id JOIN users u ON u.id=s.user_id
+       WHERE t.ticket_hash=$1 AND t.handoff_challenge=$2 AND t.expires_at>=$3 FOR UPDATE OF t,s`, [tokenDigest(ticket), handoffChallenge, now]);
+    const session = result.rows[0];
+    if (!session || !session.active || session.stage !== 'pending' || Number(session.expiresAt) < now
+        || session.sessionVersion !== session.currentVersion) return null;
+    await client.query('DELETE FROM mobile_oauth_tickets WHERE ticket_hash=$1', [tokenDigest(ticket)]);
+    const pendingToken = randomToken();
+    await client.query('UPDATE sessions SET token_hash=$1,expires_at=$2 WHERE id=$3',
+      [tokenDigest(pendingToken), now + SESSION_SECONDS, session.sessionId]);
+    return { pendingToken, mfaEnrolled: session.mfaEnrolled };
+  });
 }
 
 export async function getSession(): Promise<AuthSession | null> {

@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
-import { audit, createPendingSession, putSessionCookie } from '@/lib/auth';
+import { audit, createMobileOAuthTicket, createPendingSession, putSessionCookie } from '@/lib/auth';
 import { one } from '@/lib/db';
 import { appOrigin, cookieSecure } from '@/lib/env';
 import { randomToken } from '@/lib/security';
@@ -10,7 +10,7 @@ import { randomToken } from '@/lib/security';
 export const runtime = 'nodejs';
 
 const googleKeys = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
-const oauthCookies = ['google_oauth_state', 'google_oauth_nonce', 'google_oauth_verifier'] as const;
+const oauthCookies = ['google_oauth_state', 'google_oauth_nonce', 'google_oauth_verifier', 'google_oauth_mobile', 'google_oauth_mobile_challenge'] as const;
 const issuer = ['https://accounts.google.com', 'accounts.google.com'];
 
 function sameSecret(left: string, right: string): boolean {
@@ -31,8 +31,11 @@ function clearOauthCookies(response: NextResponse) {
   return response;
 }
 
-function failedRedirect() {
-  return clearOauthCookies(NextResponse.redirect(new URL('/?google=failed', appOrigin)));
+function failedRedirect(mobile = false, error = 'failed') {
+  const target = mobile
+    ? new URL(`vaultofvalue://oauth/callback?error=${encodeURIComponent(error)}`)
+    : new URL(`/?google=${encodeURIComponent(error)}`, appOrigin);
+  return clearOauthCookies(NextResponse.redirect(target));
 }
 
 export async function GET(request: Request) {
@@ -42,17 +45,19 @@ export async function GET(request: Request) {
   const savedState = cookieStore.get('google_oauth_state')?.value;
   const nonce = cookieStore.get('google_oauth_nonce')?.value;
   const verifier = cookieStore.get('google_oauth_verifier')?.value;
+  const mobile = cookieStore.get('google_oauth_mobile')?.value === '1';
+  const handoffChallenge = cookieStore.get('google_oauth_mobile_challenge')?.value ?? '';
   const state = query.get('state') || '';
   const code = query.get('code') || '';
 
   if (!savedState || !nonce || !verifier || !sameSecret(savedState, state) || !code || code.length > 4096 || query.has('error')) {
     await audit(null, 'auth.google', null, 'failure');
-    return failedRedirect();
+    return failedRedirect(mobile);
   }
 
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  if (!clientId || !clientSecret) return failedRedirect();
+  if (!clientId || !clientSecret) return failedRedirect(mobile, 'unconfigured');
 
   let stage = 'google_token_exchange';
   try {
@@ -110,13 +115,20 @@ export async function GET(request: Request) {
 
     if (!user.active) {
       await audit(user.id, 'auth.google', user.username, 'failure');
-      return failedRedirect();
+      return failedRedirect(mobile);
     }
 
     stage = 'session_creation';
     const session = await createPendingSession(user.id, user.session_version);
-    await putSessionCookie(session.token);
     await audit(user.id, 'auth.google', user.username);
+    if (mobile) {
+      if (!/^[a-f0-9]{64}$/.test(handoffChallenge)) return failedRedirect(true);
+      const ticket = await createMobileOAuthTicket(session.id, handoffChallenge);
+      const target = new URL('vaultofvalue://oauth/callback');
+      target.searchParams.set('ticket', ticket);
+      return clearOauthCookies(NextResponse.redirect(target));
+    }
+    await putSessionCookie(session.token);
     const step = user.totp_secret ? 'verify' : 'setup';
     return clearOauthCookies(NextResponse.redirect(new URL(`/?google=${step}`, appOrigin)));
   } catch (error) {
@@ -128,6 +140,6 @@ export async function GET(request: Request) {
       ...(code ? { code } : {}),
     });
     await audit(null, 'auth.google', null, 'failure');
-    return failedRedirect();
+    return failedRedirect(mobile);
   }
 }
